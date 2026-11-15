@@ -1,0 +1,152 @@
+# Sandbox experimental - Fases 3 y 4.
+# Tratamiento (T):  docker compose --profile treatment up -d --build
+# Control (C0):     docker compose --profile control up -d
+# Hardware: CPUSET/MEM_LIMIT son iguales para T y C0. LOAD_CPUSET separa clientes/k6
+# cuando hay nucleos suficientes (ver sandbox/README.md y .env.example).
+name: trazabilidad-sandbox
+# Usuarios de la API (los mismos en T y en C0, para que la autenticacion no sea una diferencia entre brazos).
+# Formato: usuario:clave:rol[:cooperativa]. Las claves salen de .env (ver .env.example).
+x-auth-users: &auth_users "load:${LOAD_PASS}:tecnico,sim:${SIM_PASS}:tecnico,auditor:${AUDIT_PASS}:auditor,productor:${PROD_PASS}:productor"
+networks:
+  exp-net:
+    driver: bridge
+volumes:
+  couchdb-data: {}
+  pg-data: {}
+  prom-data: {}
+services:
+  # ---------- TRATAMIENTO: Rust + CouchDB ----------
+  couchdb:
+    image: couchdb:3.3.3
+    profiles: [treatment]
+    environment:
+      COUCHDB_USER: ${COUCHDB_USER}
+      COUCHDB_PASSWORD: ${COUCHDB_PASSWORD}
+      COUCHDB_SECRET: ${COUCHDB_SECRET}
+    volumes:
+      - couchdb-data:/opt/couchdb/data
+      - ./couchdb/local.ini:/opt/couchdb/etc/local.d/10-sandbox.ini
+    networks: [exp-net]
+    cpuset: "${CPUSET:-0-1}"
+    mem_limit: ${MEM_LIMIT:-2g}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs -u $$COUCHDB_USER:$$COUCHDB_PASSWORD http://localhost:5984/_up"]
+      interval: 5s
+      retries: 20
+  api-rust:
+    build:
+      context: ../backend-rust        # esqueleto Axum (Fase 3); se extiende en la Fase 4
+      network: host                   # el puente del daemon sandbox no resuelve DNS/apt externos
+    profiles: [treatment]
+    depends_on:
+      couchdb: {condition: service_healthy}
+    environment:
+      COUCHDB_URL: http://couchdb:5984
+      COUCHDB_USER: ${COUCHDB_USER}
+      COUCHDB_PASSWORD: ${COUCHDB_PASSWORD}
+      COUCHDB_DB: trazabilidad
+      JWT_SECRET: ${JWT_SECRET}
+      AUTH_USERS: *auth_users
+      METRICS_ADDR: 0.0.0.0:9100       # /metrics (Prometheus): latencia por endpoint, hilos, duracion de transacciones
+      RUST_LOG: info
+    ports: ["8080:8080", "127.0.0.1:9100:9100"]
+    networks:
+      exp-net:
+        aliases: [api]
+    cpuset: "${CPUSET:-0-1}"
+    mem_limit: ${MEM_LIMIT:-2g}
+  # ---------- CONTROL C0: monolito relacional centralizado ----------
+  postgres:
+    image: postgres:16.4
+    profiles: [control]
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: trazabilidad
+    volumes: [pg-data:/var/lib/postgresql/data]
+    networks: [exp-net]
+    cpuset: "${CPUSET:-0-1}"
+    mem_limit: ${MEM_LIMIT:-2g}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      retries: 20
+  api-baseline:
+    build:
+      context: ../backend-baseline    # Fase 4 (monolito sincrono + PostgreSQL)
+      network: host                   # el puente del daemon sandbox no resuelve DNS/apt externos
+    profiles: [control]
+    depends_on:
+      postgres: {condition: service_healthy}
+    environment:
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@postgres:5432/trazabilidad
+      JWT_SECRET: ${JWT_SECRET}
+      AUTH_USERS: *auth_users
+      WORKERS: ${BASELINE_WORKERS:-2}  # procesos (uno por nucleo asignado)
+      THREADS: ${BASELINE_THREADS:-16} # hilos bloqueantes por proceso
+    ports: ["8080:8080"]
+    networks:
+      exp-net:
+        aliases: [api]
+    cpuset: "${CPUSET:-0-1}"
+    mem_limit: ${MEM_LIMIT:-2g}
+  # ---------- CLIENTES SIMULADOS (Dart, sin interfaz) ----------
+  client-sim:
+    build:
+      context: ..                      # sandbox_fase3/ (para poder usar cliente/trazabilidad_core)
+      dockerfile: client-sim/Dockerfile
+      network: host                   # el puente del daemon sandbox no resuelve DNS; host sí llega a pub.dev
+    profiles: [clients]
+    environment:
+      API_URL: http://api:8080
+      API_USER: sim
+      API_PASS: ${SIM_PASS}
+      ARCH: ${ARCH:-treatment}
+      DEVICES: ${DEVICES:-10}
+      SEED: ${SEED:-1}
+      RUN_SECONDS: ${RUN_SECONDS:-300}
+      WARMUP_S: ${WARMUP_S:-30}
+      MEASURE_S: ${MEASURE_S:-240}
+      DRAIN_S: ${DRAIN_S:-120}
+      OUTAGE_PLAN: ${OUTAGE_PLAN:-60:30,180:30}   # inicio_s:duracion_s
+      OUTAGE_MODE: ${OUTAGE_MODE:-self}           # self: el cliente corta la red con tc; external: outage.sh
+      NETEM_BASE: ${NETEM_BASE:-}                 # perfil base, ej. "delay 50ms 10ms loss 5% rate 2mbit"
+      MEAN_INTERVAL_S: ${MEAN_INTERVAL_S:-2.0}
+      RUN_ID: ${RUN_ID:-}
+      OUT_DIR: /results
+    volumes: ["./results:/results"]
+    networks:
+      exp-net:
+        aliases: [client-sim]
+    cpuset: "${LOAD_CPUSET:-0-1}"
+    mem_limit: ${CLIENT_MEM_LIMIT:-1g}
+    cap_add: [NET_ADMIN]
+  # ---------- CARGA Y TELEMETRIA ----------
+  k6:
+    image: grafana/k6:0.54.0
+    profiles: [load]
+    user: "0:0"                     # el usuario no root de la imagen no puede escribir results/ en el anfitrion
+    volumes: ["./k6:/scripts:ro", "./results:/results"]
+    environment:
+      TARGET: http://${ARCH_HOST:-api-rust}:8080
+      LOAD_PASS: ${LOAD_PASS}
+    networks: [exp-net]
+    cpuset: "${LOAD_CPUSET:-0-1}"
+    mem_limit: ${CLIENT_MEM_LIMIT:-1g}
+    command: run --out csv=/results/k6_raw.csv /scripts/e1_stress.js
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    volumes: ["./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro", "prom-data:/prometheus"]
+    networks: [exp-net]
+    ports: ["9090:9090"]
+    mem_limit: ${PROM_MEM_LIMIT:-512m}
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.55.1
+    privileged: true
+    command:
+      - --docker_only=true
+      - --housekeeping_interval=10s
+      - --max_housekeeping_interval=15s
+      - --disable_metrics=disk,diskIO,network,percpu,perf_event,pressure
+    volumes: ["/:/rootfs:ro", "/var/run:/var/run:ro", "/sys:/sys:ro", "/var/lib/docker/:/var/lib/docker:ro"]
+    networks: [exp-net]
+    mem_limit: ${CADVISOR_MEM_LIMIT:-256m}

@@ -1,0 +1,4 @@
+{
+  "admins":  {"names": [], "roles": ["db_admin"]},
+  "members": {"names": [], "roles": ["tecnico", "productor", "auditor"]}
+}

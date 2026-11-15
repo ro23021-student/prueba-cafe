@@ -1,0 +1,9 @@
+sandbox/.env
+sandbox/results/
+**/build/
+**/.dart_tool/
+backend-rust/target/
+**/__pycache__/
+*.pyc
+!sandbox/.env.example
+**/.flutter-plugins-dependencies

@@ -1,0 +1,21 @@
+name: Client-sim
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'client-sim/**'
+      - 'cliente/trazabilidad_core/**'
+      - '.github/workflows/clientsim.yml'
+jobs:
+  probar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with: { channel: stable, cache: true }
+      - name: Analizar y probar
+        working-directory: client-sim
+        run: dart pub get && dart analyze && dart test
+      - name: Compilar el ejecutable (como en el Dockerfile)
+        working-directory: client-sim
+        run: dart compile exe bin/client_sim.dart -o /tmp/client_sim

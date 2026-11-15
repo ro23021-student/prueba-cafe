@@ -1,0 +1,72 @@
+name: Calidad
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: backend-rust } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: rustfmt, clippy }
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: backend-rust }
+      - name: Formato
+        run: cargo fmt --all -- --check
+      - name: Clippy sin warnings
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Pruebas
+        run: cargo test --all-targets
+      - name: Construccion release
+        run: cargo build --release
+  baseline:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: backend-baseline } }
+    services:
+      postgres:
+        image: postgres:16.4
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: trazabilidad
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s
+          --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - name: Dependencias
+        run: pip install -r requirements.txt pytest
+      - name: Pruebas
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:test@localhost:5432/trazabilidad
+        run: pytest -q
+  dart:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        proyecto: [cliente/trazabilidad_core, client-sim]
+    defaults:
+      run:
+        working-directory: ${{ matrix.proyecto }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with: { sdk: stable }
+      - run: dart pub get
+      - run: dart analyze
+      - run: dart test
+  flutter:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: cliente/trazabilidad_app } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with: { channel: stable, cache: true }
+      - run: flutter pub get
+      - run: flutter analyze

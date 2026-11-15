@@ -1,0 +1,24 @@
+name: trazabilidad_app
+description: App de registro en campo para trazabilidad de café (offline-first).
+publish_to: none
+version: 0.2.0+2
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  trazabilidad_core:
+    path: ../trazabilidad_core
+  path_provider: ^2.1.4
+  flutter_secure_storage: ^9.2.4
+  connectivity_plus: ^7.3.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true

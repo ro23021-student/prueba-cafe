@@ -1,0 +1,6 @@
+.git
+backend-rust
+sandbox
+cliente/trazabilidad_app
+**/.dart_tool
+**/build

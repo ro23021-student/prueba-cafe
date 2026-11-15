@@ -1,0 +1,11 @@
+global: {scrape_interval: 1s}
+scrape_configs:
+  - job_name: api-rust            # metricas internas del backend (perfil treatment)
+    static_configs: [{targets: ['api-rust:9100']}]
+  - job_name: couchdb             # estadisticas del motor (perfil treatment)
+    metrics_path: /_node/_local/_prometheus
+    static_configs: [{targets: ['couchdb:17986']}]
+  - job_name: cadvisor            # CPU y memoria de cada contenedor (ambos perfiles)
+    static_configs: [{targets: ['cadvisor:8080']}]
+# api-baseline (C0) no exporta metricas internas: su CPU/RAM salen de cAdvisor y su latencia de k6 y client-sim.
+# Los targets del perfil que no esta levantado aparecen como "down"; es normal.

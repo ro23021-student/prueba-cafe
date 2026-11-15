@@ -1,0 +1,16 @@
+name: client_sim
+description: Cliente simulado (Dart, sin interfaz) para el escenario E2 de la Fase 3. Comparte el núcleo con la app Flutter.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  http: ^1.2.2
+  trazabilidad_core:
+    path: ../cliente/trazabilidad_core
+
+dev_dependencies:
+  test: ^1.25.0
+  lints: ^4.0.0
