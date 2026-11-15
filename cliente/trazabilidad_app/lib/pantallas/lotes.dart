@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:trazabilidad_core/trazabilidad_core.dart';
 import '../estado_app.dart';
+import 'editar.dart';
 
 String fechaCorta(int ts) {
   final d = DateTime.fromMillisecondsSinceEpoch(ts * 1000);
@@ -57,6 +58,79 @@ class _PantallaLotesState extends State<PantallaLotes> {
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(mensaje)));
+  }
+
+  void _editar(RegistroLocal r) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => PantallaEditar(estado: widget.estado, registro: r),
+      ),
+    );
+  }
+
+  /// Pide confirmación y quita el evento de ESTE teléfono. El servidor nunca se modifica.
+  Future<void> _eliminar(RegistroLocal r) async {
+    final sincronizado = r.estado == EstadoSync.sincronizado;
+    final ev = r.evento;
+    final confirmado = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Eliminar evento'),
+        content: Text(
+          sincronizado
+              ? 'El servidor conserva este evento; solo se quita de este '
+                    'teléfono.\n\n${ev.loteId} · ${ev.etapa.name}'
+              : 'Este evento todavía no llegó al servidor. Si lo eliminas, '
+                    'nunca se enviará.\n\n${ev.loteId} · ${ev.etapa.name}',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Eliminar'),
+          ),
+        ],
+      ),
+    );
+    if (confirmado != true) return;
+    final error = await widget.estado.eliminar(r);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          error ??
+              (sincronizado
+                  ? 'Evento quitado de este teléfono. El servidor lo conserva.'
+                  : 'Evento eliminado. No se enviará.'),
+        ),
+      ),
+    );
+  }
+
+  /// Menú de acciones del evento; solo muestra lo que el rol y el estado permiten.
+  Widget? _menu(RegistroLocal r) {
+    final puedeEditar = widget.estado.puedeEditar(r);
+    final puedeEliminar = widget.estado.puedeEliminar(r);
+    if (!puedeEditar && !puedeEliminar) return null;
+    return PopupMenuButton<String>(
+      tooltip: 'Acciones',
+      onSelected: (accion) {
+        if (accion == 'editar') {
+          _editar(r);
+        } else if (accion == 'eliminar') {
+          unawaited(_eliminar(r));
+        }
+      },
+      itemBuilder: (_) => [
+        if (puedeEditar)
+          const PopupMenuItem(value: 'editar', child: Text('Editar')),
+        if (puedeEliminar)
+          const PopupMenuItem(value: 'eliminar', child: Text('Eliminar')),
+      ],
+    );
   }
 
   Widget _chip(EstadoSync s) {
@@ -131,6 +205,7 @@ class _PantallaLotesState extends State<PantallaLotes> {
                         final r = lista[i];
                         final ev = r.evento;
                         final peso = ev.extra['peso_kg'];
+                        final menu = _menu(r);
                         return ListTile(
                           title: Text('${ev.loteId} · ${ev.etapa.name}'),
                           subtitle: Text(
@@ -147,6 +222,7 @@ class _PantallaLotesState extends State<PantallaLotes> {
                                 onPressed: () =>
                                     unawaited(_verEnServidor(ev.loteId)),
                               ),
+                              if (menu != null) menu,
                             ],
                           ),
                         );

@@ -75,6 +75,13 @@ class AlmacenMemoria implements AlmacenLocal {
   final Map<String, RegistroLocal> _registros = {};
   final StreamController<void> _cambios = StreamController<void>.broadcast();
 
+  /// Eventos (por identidad de objeto) que se editaron o eliminaron en este dispositivo.
+  /// El motor de sincronización trabaja con una copia de los pendientes y, al terminar un intento,
+  /// llama a [actualizar] con esa copia; sin este registro un intento en curso podría deshacer una
+  /// edición o resucitar un evento eliminado. Solo afecta a eventos retirados con [eliminar] o
+  /// [reemplazarNoSincronizado]; el resto de flujos (app, client-sim) no cambia.
+  final Set<EventoLote> _retirados = Set<EventoLote>.identity();
+
   @override
   Stream<void> get cambios => _cambios.stream;
 
@@ -120,9 +127,51 @@ class AlmacenMemoria implements AlmacenLocal {
 
   @override
   Future<void> actualizar(RegistroLocal r) async {
+    // Una copia vieja de un evento ya editado o eliminado no debe volver a escribirse.
+    if (_retirados.contains(r.evento)) return;
     _registros[r.evento.id] = r;
     await _persistir();
     _cambios.add(null);
+  }
+
+  /// Quita un evento SOLO de este dispositivo. No avisa ni modifica nada en el servidor:
+  /// si el evento ya estaba sincronizado, el servidor lo conserva (el historial es inmutable).
+  /// Devuelve false si no existía.
+  Future<bool> eliminar(String id) async {
+    final quitado = _registros.remove(id);
+    if (quitado == null) return false;
+    _retirados.add(quitado.evento);
+    await _persistir();
+    _cambios.add(null);
+    return true;
+  }
+
+  /// Sustituye un evento que el servidor nunca aceptó (pendiente o rechazado) por su versión
+  /// corregida, que queda como pendiente con los intentos y el error reiniciados. Si el id cambia,
+  /// el registro anterior desaparece. Todo se guarda en una sola escritura.
+  /// Devuelve false si el evento no existe, ya está sincronizado, o el id nuevo choca con otro
+  /// registro distinto.
+  Future<bool> reemplazarNoSincronizado(
+    String idAnterior,
+    EventoLote nuevo,
+  ) async {
+    final previo = _registros[idAnterior];
+    if (previo == null || previo.estado == EstadoSync.sincronizado) {
+      return false;
+    }
+    if (nuevo.id != idAnterior && _registros.containsKey(nuevo.id)) {
+      return false;
+    }
+    _registros.remove(idAnterior);
+    _retirados.add(previo.evento);
+    _registros[nuevo.id] = RegistroLocal(
+      evento: nuevo,
+      estado: EstadoSync.pendiente,
+      creadoMs: previo.creadoMs,
+    );
+    await _persistir();
+    _cambios.add(null);
+    return true;
   }
 }
 

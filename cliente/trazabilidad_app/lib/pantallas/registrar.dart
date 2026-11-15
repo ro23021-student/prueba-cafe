@@ -43,12 +43,18 @@ class _PantallaRegistrarState extends State<PantallaRegistrar> {
     final n = double.tryParse(v.trim().replaceAll(',', '.'));
     return (n == null || n <= 0) ? 'Número mayor que 0' : null;
   }
+  RegistroLocal? _masReciente() {
+    final r = widget.estado.registros;
+    if (r.isEmpty) return null;
+    return r.reduce((a, b) => a.creadoMs >= b.creadoMs ? a : b);
+  }
 
   Future<void> _guardar() async {
     if (!_form.currentState!.validate()) return;
     final peso = _peso.text.trim().isEmpty
         ? null
         : double.parse(_peso.text.trim().replaceAll(',', '.'));
+    final mensajero = ScaffoldMessenger.of(context);
     final error = await widget.estado.registrar(
       loteId: _lote.text,
       cooperativaId: _coop.text,
@@ -58,20 +64,27 @@ class _PantallaRegistrarState extends State<PantallaRegistrar> {
       notas: _notas.text,
     );
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          error ??
-              'Guardado en el dispositivo. Se enviará cuando haya conexión.',
-        ),
-      ),
-    );
-    if (error == null) {
-      // Se conservan cooperativa y responsable: en campo se registran varios eventos seguidos.
-      _lote.clear();
-      _peso.clear();
-      _notas.clear();
+    if (error != null) {
+      mensajero.showSnackBar(SnackBar(content: Text(error)));
+      return;
     }
+    // Se conservan cooperativa y responsable para registrar varios seguidos.
+    _lote.clear();
+    _peso.clear();
+    _notas.clear();
+
+    // Margen para que el motor intente enviar antes de decidir el mensaje.
+    await Future.delayed(const Duration(milliseconds: 1500));
+    final r = _masReciente();
+    final String texto;
+    if (r?.estado == EstadoSync.sincronizado) {
+      texto = 'Guardado y enviado al servidor.';
+    } else if (r?.estado == EstadoSync.rechazado) {
+      texto = 'El servidor rechazó el evento: ${r?.ultimoError ?? ''}';
+    } else {
+      texto = 'Guardado en el dispositivo. Se enviará cuando haya conexión.';
+    }
+    mensajero.showSnackBar(SnackBar(content: Text(texto)));
   }
 
   @override
